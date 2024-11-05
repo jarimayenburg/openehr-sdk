@@ -1,7 +1,9 @@
 use nutype::nutype;
+use regex::Regex;
 use serde::Deserialize;
 use serde::{de, Serialize};
 use std::str::FromStr;
+use thiserror::Error;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 struct Id {
@@ -62,8 +64,8 @@ pub struct ObjectId(String);
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct UidBasedId {
-    root: Uid,
-    extension: Option<String>,
+    pub root: Uid,
+    pub extension: Option<String>,
 }
 
 impl ToString for UidBasedId {
@@ -93,12 +95,80 @@ impl FromStr for UidBasedId {
     }
 }
 
+#[nutype(derive(Debug, PartialEq, Eq, AsRef, Deref, FromStr))]
+pub struct HierObjectId(UidBasedId);
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ObjectVersionId {
+    pub object_id: Uid,
+    pub creating_system_id: Uid,
+    pub version_tree_id: VersionTreeId,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct VersionTreeId {
+    // Trunk version
+    pub trunk_version: String,
+
+    // Branch number and version
+    pub branch: Option<(u32, u32)>,
+}
+
+#[derive(Error, Debug, Clone)]
+#[error("invalid VERSION_TREE_ID")]
+pub struct InvalidVersionTreeId;
+
+impl FromStr for VersionTreeId {
+    type Err = InvalidVersionTreeId;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let re = Regex::new(r"^([1-9][0-9]*)(?:\.([1-9][0-9]*)\.([1-9][0-9]*))?$").unwrap();
+
+        let caps = re.captures(s).ok_or(InvalidVersionTreeId)?;
+
+        let trunk_version = caps.get(1).unwrap().as_str().to_string();
+
+        let id = if let (Some(branch_number), Some(branch_version)) = (
+            caps.get(2).map(|c| c.as_str().parse::<u32>().unwrap()),
+            caps.get(3).map(|c| c.as_str().parse::<u32>().unwrap()),
+        ) {
+            VersionTreeId {
+                trunk_version,
+                branch: Some((branch_number, branch_version)),
+            }
+        } else {
+            VersionTreeId {
+                trunk_version,
+                branch: None,
+            }
+        };
+
+        Ok(id)
+    }
+}
+
+impl ToString for VersionTreeId {
+    fn to_string(&self) -> String {
+        let Self {
+            trunk_version,
+            branch,
+        } = self;
+
+        if let Some((branch_number, branch_version)) = branch {
+            format!("{trunk_version}.{branch_number}.{branch_version}")
+        } else {
+            format!("{trunk_version}")
+        }
+    }
+}
+
 serde_id!(Uid);
 serde_id!(IsoOid);
 serde_id!(IsoUuid);
 serde_id!(InternetId);
 serde_id!(ObjectId);
 serde_id!(UidBasedId);
+serde_id!(VersionTreeId);
 
 #[cfg(test)]
 mod tests {
@@ -209,8 +279,52 @@ mod tests {
         UidBasedId::from_str("").expect("empty UID_BASED_ID parses");
     }
 
+    #[test]
+    fn parse_version_tree_id() {
+        VersionTreeId::from_str("1").expect("VERSION_TREE_ID with only trunk parses");
+
+        VersionTreeId::from_str("1.2.3")
+            .expect("VERSION_TREE_ID with trunk, branch number and branch version parses");
+
+        VersionTreeId::from_str("1.2").expect_err(
+            "VERSION_TREE_ID with trunk and branch number but without branch version does not parse",
+        );
+
+        VersionTreeId::from_str("1..").expect_err(
+            "VERSION_TREE_ID with trunk, empty branch number and empty branch version does not parse",
+        );
+
+        VersionTreeId::from_str("1.2.").expect_err(
+            "VERSION_TREE_ID with trunk, branch number and empty branch version does not parse",
+        );
+
+        VersionTreeId::from_str("1..3").expect_err(
+            "VERSION_TREE_ID with trunk, branch version and empty branch number does not parse",
+        );
+
+        VersionTreeId::from_str("1..").expect_err(
+            "VERSION_TREE_ID with trunk and empty branch number and version does not parse",
+        );
+
+        VersionTreeId::from_str("..").expect_err(
+            "VERSION_TREE_ID with empty trunk, empty branch number and empty version does not parse",
+        );
+
+        VersionTreeId::from_str("0.2.3")
+            .expect_err("VERSION_TREE_ID with trunk < 1 does not parse");
+
+        VersionTreeId::from_str("1.0.3")
+            .expect_err("VERSION_TREE_ID with branch number < 1 does not parse");
+
+        VersionTreeId::from_str("1.2.0")
+            .expect_err("VERSION_TREE_ID with branch version < 1 does not parse");
+
+        VersionTreeId::from_str("").expect_err("empty VERSION_TREE_ID does not parse");
+    }
+
     serde_tests!(IsoOid, "2.16.8");
     serde_tests!(IsoUuid, "b29f2d41-0451-4658-b5ac-5e09cbdb2be4");
     serde_tests!(InternetId, "org.openehr");
     serde_tests!(UidBasedId, "root::extension");
+    serde_tests!(VersionTreeId, "1.2.3");
 }
