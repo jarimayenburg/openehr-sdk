@@ -1,4 +1,5 @@
 use nutype::nutype;
+use paste::paste;
 use regex::Regex;
 use serde::Deserialize;
 use serde::{de, Serialize};
@@ -7,32 +8,37 @@ use thiserror::Error;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 struct Id {
+    #[serde(rename = "_type")]
+    r#type: String,
     value: String,
 }
 
 macro_rules! serde_id {
     ($type:ident) => {
-        impl Serialize for $type {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: serde::Serializer,
-            {
-                let id = Id {
-                    value: self.to_string(),
-                };
+        paste! {
+            impl Serialize for $type {
+                fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+                where
+                    S: serde::Serializer,
+                {
+                    let id = Id {
+                        r#type: stringify!([< $type:snake:upper >]).to_string(),
+                        value: self.to_string(),
+                    };
 
-                id.serialize(serializer)
+                    id.serialize(serializer)
+                }
             }
-        }
 
-        impl<'de> Deserialize<'de> for $type {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                let id = Id::deserialize(deserializer)?;
+            impl<'de> Deserialize<'de> for $type {
+                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                where
+                    D: serde::Deserializer<'de>,
+                {
+                    let id = Id::deserialize(deserializer)?;
 
-                Self::from_str(&id.value).map_err(de::Error::custom)
+                    Self::from_str(&id.value).map_err(de::Error::custom)
+                }
             }
         }
     };
@@ -183,6 +189,7 @@ mod tests {
                 #[test]
                 fn [<serialize_ $type:snake>]() {
                     let expected = json!({
+                        "_type": stringify!([< $type:snake:upper >]),
                         "value": $valid_value
                     });
 
@@ -200,6 +207,7 @@ mod tests {
                     let expected = $type::from_str($valid_value).expect("OID parses");
 
                     let json_value = json!({
+                        "_type": stringify!([< $type:snake:upper >]),
                         "value": $valid_value
                     });
 
